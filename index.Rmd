@@ -1,0 +1,480 @@
+---
+title: "Laporan PT Green Charge Indonesia"
+subtitle: "PT Green Charge Indonesia"
+author: "Finesya Aura Nadifa"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: flatly
+params:
+  bulan: 5
+  tahun: 2026
+  path_data: '/Users/finesyaaura/Documents/coolyeah/Semester 4/Prak Komstat/Data Eval 4/'
+---
+
+```{css, echo=FALSE}
+body { font-family: 'Segoe UI', sans-serif; font-size: 14px; color: #2c3e50; }
+h1, h2, h3 { color: #1a6b3c; }
+.info-box {
+  background: linear-gradient(135deg, #e8f5e9, #f1f8e9);
+  border-left: 5px solid #2e7d32;
+  padding: 15px 20px; border-radius: 6px; margin: 15px 0;
+}
+.kpi-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 15px; margin: 20px 0;
+}
+.kpi-card {
+  background: #fff; border: 1px solid #e0e0e0;
+  border-radius: 10px; padding: 18px; text-align: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+.kpi-card .nilai { font-size: 26px; font-weight: 700; color: #1a6b3c; }
+.kpi-card .label { font-size: 12px; color: #757575; margin-top: 4px; }
+.kpi-card .ikon  { font-size: 28px; margin-bottom: 6px; }
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 9,
+  fig.height = 5
+)
+
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(scales)
+library(lubridate)
+
+# Baca Parameter
+bulan_laporan <- params$bulan
+tahun_laporan <- params$tahun
+path_data     <- params$path_data
+
+# Baca Data
+stasiun         <- read.csv(paste0(path_data, "data_stasiun.csv"))
+transaksi       <- read.csv(paste0(path_data, "data_transaksi.csv"))
+konsumsi_harian <- read.csv(paste0(path_data, "data_konsumsi_harian.csv"))
+historis        <- read.csv(paste0(path_data, "data_historis_bulanan.csv"))
+
+# Konversi ke Date
+transaksi$tanggal  <- as.Date(transaksi$tanggal)
+konsumsi_harian$tanggal <- as.Date(konsumsi_harian$tanggal)
+historis$periode   <- as.Date(historis$periode)
+
+# --- FILTER DATA SESUAI PARAMETER ---
+transaksi_bulan <- transaksi %>%
+  filter(month(tanggal) == bulan_laporan & year(tanggal) == tahun_laporan)
+
+konsumsi_bulan <- konsumsi_harian %>%
+  filter(month(tanggal) == bulan_laporan & year(tanggal) == tahun_laporan)
+
+# Nama bulan untuk judul (dalam Bahasa Indonesia)
+nama_bulan <- format(as.Date(paste0(tahun_laporan, "-", bulan_laporan, "-01")), "%B")
+
+# --- KPI BULAN BERJALAN (hanya dari data terfilter) ---
+tx_selesai <- transaksi_bulan %>% filter(status == "Selesai")
+
+total_sesi       <- nrow(tx_selesai)
+total_kwh        <- sum(tx_selesai$energi_kwh)
+total_pendapatan <- sum(tx_selesai$pendapatan)
+rata_kwh_sesi    <- mean(tx_selesai$energi_kwh)
+total_charger    <- sum(stasiun$jumlah_charger)
+
+# Utilisasi rata-rata (jika data kosong, set NA)
+utilisasi_rata <- if(nrow(konsumsi_bulan) > 0) {
+  round(mean(konsumsi_bulan$utilisasi_persen), 1)
+} else { NA }
+
+# --- PREDIKSI (tetap menggunakan 6 bulan historis, tidak difilter) ---
+historis$t <- 1:nrow(historis)
+model_kwh  <- lm(total_kwh  ~ t, data = historis)
+model_sesi <- lm(total_sesi ~ t, data = historis)
+
+t_berikutnya <- nrow(historis) + 1
+pred_kwh  <- predict(model_kwh,  newdata = data.frame(t = t_berikutnya))
+pred_sesi <- predict(model_sesi, newdata = data.frame(t = t_berikutnya))
+pred_pend <- pred_kwh * 2500   # tarif per kWh
+
+r2_kwh  <- round(summary(model_kwh)$r.squared  * 100, 1)
+r2_sesi <- round(summary(model_sesi)$r.squared * 100, 1)
+
+# Bulan berikutnya (untuk prediksi)
+bulan_berikutnya <- format(as.Date(paste0(tahun_laporan, "-", bulan_laporan + 1, "-01")), "%B")
+tahun_berikutnya <- ifelse(bulan_laporan == 12, tahun_laporan + 1, tahun_laporan)
+```
+
+---
+
+<div class="info-box">
+📋 **Laporan ini dibuat secara otomatis** oleh Sistem Pelaporan PT Green Charge Indonesia.  
+Periode: **`r paste(nama_bulan, tahun_laporan)`** | Data diperbarui: `r format(Sys.time(), "%d %B %Y, %H:%M")`
+</div>
+
+# Ringkasan Eksekutif {.unnumbered}
+
+<div class="kpi-grid">
+<div class="kpi-card">
+<div class="ikon">⚡</div>
+<div class="nilai">`r format(round(total_kwh), big.mark = ".")`</div>
+<div class="label">Total Energi Tersalurkan (kWh)</div>
+</div>
+<div class="kpi-card">
+<div class="ikon">🔌</div>
+<div class="nilai">`r format(total_sesi, big.mark = ".")`</div>
+<div class="label">Total Sesi Pengisian</div>
+</div>
+<div class="kpi-card">
+<div class="ikon">💰</div>
+<div class="nilai">Rp `r format(round(total_pendapatan/1e6, 1), big.mark = ".")` Jt</div>
+<div class="label">Total Pendapatan</div>
+</div>
+<div class="kpi-card">
+<div class="ikon">📊</div>
+<div class="nilai">`r ifelse(is.na(utilisasi_rata), "N/A", paste0(utilisasi_rata, "%"))`</div>
+<div class="label">Rata-rata Utilisasi Stasiun</div>
+</div>
+</div>
+
+---
+
+# Tingkat Pemanfaatan Stasiun Pengisian
+
+## Utilisasi per Stasiun
+
+```{r tabel-utilisasi}
+if(nrow(konsumsi_bulan) > 0) {
+  tabel_utilisasi <- konsumsi_bulan %>%
+    group_by(id_stasiun, nama_stasiun) %>%
+    summarise(
+      Total_Sesi   = sum(total_sesi),
+      Total_kWh    = round(sum(total_kwh), 1),
+      Utilisasi    = round(mean(utilisasi_persen), 1),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(Utilisasi)) %>%
+    rename(
+      "ID Stasiun"   = id_stasiun,
+      "Nama Stasiun" = nama_stasiun,
+      "Total Sesi"   = Total_Sesi,
+      "Total kWh"    = Total_kWh,
+      "Utilisasi (%)"= Utilisasi
+    )
+  
+  kable(tabel_utilisasi, align = c("c","l","c","c","c"),
+        caption = paste("Tabel 1. Tingkat Utilisasi Stasiun Pengisian —", nama_bulan, tahun_laporan)) %>%
+    kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"),
+                  full_width = TRUE) %>%
+    column_spec(5, bold = TRUE,
+                color = ifelse(tabel_utilisasi$`Utilisasi (%)` >= 50, "#1a6b3c", "#c0392b")) %>%
+    row_spec(0, bold = TRUE, background = "#1a6b3c", color = "white")
+} else {
+  cat("Tidak ada data untuk periode ini.")
+}
+```
+
+## Visualisasi Utilisasi Stasiun
+
+```{r plot-utilisasi}
+if(nrow(konsumsi_bulan) > 0) {
+  plot_util <- konsumsi_bulan %>%
+    group_by(nama_stasiun) %>%
+    summarise(utilisasi = round(mean(utilisasi_persen), 1), .groups = "drop") %>%
+    arrange(utilisasi)
+  
+  ggplot(plot_util, aes(x = reorder(nama_stasiun, utilisasi), y = utilisasi,
+                         fill = utilisasi)) +
+    geom_col(width = 0.7, show.legend = FALSE) +
+    geom_text(aes(label = paste0(utilisasi, "%")),
+              hjust = -0.2, size = 3.5, fontface = "bold", color = "#2c3e50") +
+    scale_fill_gradient(low = "#a8d5b5", high = "#1a6b3c") +
+    scale_y_continuous(limits = c(0, max(plot_util$utilisasi) * 1.15),
+                       labels = function(x) paste0(x, "%")) +
+    coord_flip() +
+    labs(title    = "Tingkat Utilisasi Stasiun Pengisian",
+         subtitle = paste("Rata-rata Harian —", nama_bulan, tahun_laporan),
+         x = NULL, y = "Utilisasi (%)") +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title    = element_text(face = "bold", color = "#1a6b3c", size = 14),
+      plot.subtitle = element_text(color = "#555555", size = 11),
+      panel.grid.major.y = element_blank(),
+      axis.text.y   = element_text(size = 10)
+    )
+} else {
+  cat("Tidak ada data untuk periode ini.")
+}
+```
+
+# Total Konsumsi Energi
+
+## Tren Konsumsi Harian
+
+```{r plot-konsumsi-harian}
+if(nrow(konsumsi_bulan) > 0) {
+  tren_harian <- konsumsi_bulan %>%
+    group_by(tanggal) %>%
+    summarise(kwh_harian = sum(total_kwh), .groups = "drop")
+  
+  ggplot(tren_harian, aes(x = tanggal, y = kwh_harian)) +
+    geom_area(fill = "#a8d5b5", alpha = 0.5) +
+    geom_line(color = "#1a6b3c", linewidth = 1.2) +
+    geom_point(color = "#1a6b3c", size = 2) +
+    scale_x_date(date_labels = "%d %b", date_breaks = "5 days") +
+    scale_y_continuous(labels = comma) +
+    labs(title    = "Tren Konsumsi Energi Harian",
+         subtitle = paste("Total kWh Tersalurkan —", nama_bulan, tahun_laporan),
+         x = "Tanggal", y = "Energi (kWh)") +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title    = element_text(face = "bold", color = "#1a6b3c", size = 14),
+      plot.subtitle = element_text(color = "#555555"),
+      axis.text.x   = element_text(angle = 45, hjust = 1)
+    )
+} else {
+  cat("Tidak ada data untuk periode ini.")
+}
+```
+
+## Distribusi Konsumsi per Stasiun
+
+```{r plot-pie-konsumsi}
+if(nrow(konsumsi_bulan) > 0) {
+  konsumsi_stasiun <- konsumsi_bulan %>%
+    group_by(nama_stasiun) %>%
+    summarise(kwh = sum(total_kwh), .groups = "drop") %>%
+    mutate(
+      persen = round(kwh / sum(kwh) * 100, 1),
+      label  = paste0(persen, "%")
+    ) %>%
+    arrange(desc(kwh))
+  
+  ggplot(konsumsi_stasiun, aes(x = reorder(nama_stasiun, kwh), y = kwh, fill = nama_stasiun)) +
+    geom_col(show.legend = FALSE, width = 0.7) +
+    geom_text(aes(label = paste0(comma(round(kwh)), " kWh")),
+              hjust = -0.1, size = 3.2, color = "#2c3e50") +
+    scale_fill_manual(values = colorRampPalette(c("#c8e6c9","#1a6b3c"))(10)) +
+    scale_y_continuous(limits = c(0, max(konsumsi_stasiun$kwh) * 1.2),
+                       labels = comma) +
+    coord_flip() +
+    labs(title    = "Total Konsumsi Energi per Stasiun",
+         subtitle = paste("Akumulasi", nama_bulan, tahun_laporan),
+         x = NULL, y = "Energi (kWh)") +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title    = element_text(face = "bold", color = "#1a6b3c", size = 14),
+      plot.subtitle = element_text(color = "#555555"),
+      panel.grid.major.y = element_blank()
+    )
+} else {
+  cat("Tidak ada data untuk periode ini.")
+}
+```
+
+---
+
+# Pendapatan
+
+## Tren Pendapatan Harian
+
+```{r plot-pendapatan}
+if(nrow(konsumsi_bulan) > 0) {
+  tren_pendapatan <- konsumsi_bulan %>%
+    group_by(tanggal) %>%
+    summarise(pendapatan = sum(total_pendapatan), .groups = "drop")
+  
+  ggplot(tren_pendapatan, aes(x = tanggal, y = pendapatan)) +
+    geom_area(fill = "#fff9c4", alpha = 0.7) +
+    geom_line(color = "#f9a825", linewidth = 1.2) +
+    geom_point(color = "#f57f17", size = 2) +
+    scale_x_date(date_labels = "%d %b", date_breaks = "5 days") +
+    scale_y_continuous(labels = function(x) paste0("Rp ", format(x/1e6, big.mark=".", decimal.mark=","), " Jt")) +
+    labs(title    = "Tren Pendapatan Harian",
+         subtitle = paste(nama_bulan, tahun_laporan),
+         x = "Tanggal", y = "Pendapatan") +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title    = element_text(face = "bold", color = "#1a6b3c", size = 14),
+      plot.subtitle = element_text(color = "#555555"),
+      axis.text.x   = element_text(angle = 45, hjust = 1)
+    )
+} else {
+  cat("Tidak ada data untuk periode ini.")
+}
+```
+
+## Pendapatan per Stasiun
+
+```{r tabel-pendapatan}
+if(nrow(konsumsi_bulan) > 0) {
+  tabel_pend <- konsumsi_bulan %>%
+    group_by(id_stasiun, nama_stasiun) %>%
+    summarise(
+      Total_Pendapatan = sum(total_pendapatan),
+      Total_kWh        = round(sum(total_kwh), 1),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(Total_Pendapatan)) %>%
+    mutate(
+      Pendapatan_Fmt = paste0("Rp ", format(round(Total_Pendapatan), big.mark = "."))
+    ) %>%
+    select(id_stasiun, nama_stasiun, Total_kWh, Pendapatan_Fmt) %>%
+    rename(
+      "ID Stasiun"   = id_stasiun,
+      "Nama Stasiun" = nama_stasiun,
+      "Total kWh"    = Total_kWh,
+      "Pendapatan"   = Pendapatan_Fmt
+    )
+  
+  kable(tabel_pend, align = c("c","l","c","r"),
+        caption = paste("Tabel 2. Pendapatan per Stasiun —", nama_bulan, tahun_laporan)) %>%
+    kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"),
+                  full_width = TRUE) %>%
+    row_spec(0, bold = TRUE, background = "#f9a825", color = "white") %>%
+    row_spec(1, bold = TRUE, background = "#fffde7")
+} else {
+  cat("Tidak ada data untuk periode ini.")
+}
+```
+
+---
+
+# Prediksi Permintaan Energi Bulan Berikutnya
+
+## Data Historis 6 Bulan
+
+```{r tabel-historis}
+historis_fmt <- historis %>%
+  mutate(
+    Pendapatan_Fmt = paste0("Rp ", format(round(total_pendapatan), big.mark = "."))
+  ) %>%
+  select(bulan, total_sesi, total_kwh, Pendapatan_Fmt) %>%
+  rename(
+    "Bulan"       = bulan,
+    "Total Sesi"  = total_sesi,
+    "Total kWh"   = total_kwh,
+    "Pendapatan"  = Pendapatan_Fmt
+  )
+
+kable(historis_fmt, align = c("l","c","c","r"),
+      caption = "Tabel 3. Data Historis Konsumsi Energi (Januari–Juni 2025)") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"),
+                full_width = TRUE) %>%
+  row_spec(0, bold = TRUE, background = "#1565c0", color = "white") %>%
+  row_spec(nrow(historis_fmt), bold = TRUE, background = "#e3f2fd")
+```
+
+## Model Prediksi (Regresi Linear)
+
+```{r prediksi-model}
+# Model sudah dihitung di setup
+```
+
+Model regresi linear sederhana digunakan untuk memprediksi permintaan energi bulan `r bulan_berikutnya` `r tahun_berikutnya` berdasarkan tren 6 bulan terakhir.  
+Model kWh memiliki nilai R² = **`r r2_kwh`%** dan model sesi memiliki R² = **`r r2_sesi`%**, menunjukkan tren yang konsisten.
+
+```{r plot-prediksi}
+historis_plot <- historis %>%
+  select(bulan, total_kwh, total_sesi) %>%
+  mutate(tipe = "Aktual", t = 1:n())
+
+prediksi_row <- data.frame(
+  bulan = paste(bulan_berikutnya, "(Prediksi)"),
+  total_kwh   = round(pred_kwh),
+  total_sesi  = round(pred_sesi),
+  tipe = "Prediksi",
+  t = t_berikutnya
+)
+
+gabungan <- bind_rows(historis_plot, prediksi_row)
+
+ggplot(gabungan, aes(x = reorder(bulan, t), y = total_kwh,
+                      group = 1, color = tipe)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(aes(shape = tipe), size = 4) +
+  geom_label(data = filter(gabungan, tipe == "Prediksi"),
+             aes(label = paste0(format(round(total_kwh), big.mark="."), " kWh")),
+             vjust = -1, color = "#c0392b", fontface = "bold", size = 3.5) +
+  scale_color_manual(values = c("Aktual" = "#1a6b3c", "Prediksi" = "#c0392b")) +
+  scale_shape_manual(values = c("Aktual" = 16, "Prediksi" = 18)) +
+  scale_y_continuous(labels = comma) +
+  labs(title    = "Tren & Prediksi Konsumsi Energi",
+       subtitle = paste("Januari–", bulan_berikutnya, tahun_berikutnya, "(Prediksi Regresi Linear)"),
+       x = NULL, y = "Total kWh", color = NULL, shape = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", color = "#1a6b3c", size = 14),
+    plot.subtitle = element_text(color = "#555555"),
+    legend.position = "top",
+    axis.text.x   = element_text(angle = 30, hjust = 1)
+  )
+```
+
+## Hasil Prediksi `r bulan_berikutnya` `r tahun_berikutnya`
+
+```{r tabel-prediksi}
+tabel_pred <- data.frame(
+  Metrik      = c("Total Energi (kWh)", "Total Sesi Pengisian", "Estimasi Pendapatan"),
+  `Bulan Ini` = c(format(round(total_kwh), big.mark="."),
+                  format(total_sesi, big.mark="."),
+                  paste0("Rp ", format(round(total_pendapatan), big.mark="."))),
+  `Prediksi` = c(
+    format(round(pred_kwh), big.mark="."),
+    format(round(pred_sesi), big.mark="."),
+    paste0("Rp ", format(round(pred_pend), big.mark="."))
+  ),
+  Perubahan   = c(
+    paste0("+", round((pred_kwh - total_kwh)/total_kwh*100, 1), "%"),
+    paste0("+", round((pred_sesi - total_sesi)/total_sesi*100, 1), "%"),
+    paste0("+", round((pred_pend - total_pendapatan)/total_pendapatan*100, 1), "%")
+  )
+)
+
+kable(tabel_pred, 
+      col.names = c("Metrik", paste(nama_bulan, tahun_laporan), 
+                    paste(bulan_berikutnya, tahun_berikutnya, "(Prediksi)"), "Perubahan"),
+      align = c("l","r","r","c"),
+      caption = paste("Tabel 4. Perbandingan Aktual vs Prediksi —", bulan_berikutnya, tahun_berikutnya)) %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"),
+                full_width = TRUE) %>%
+  row_spec(0, bold = TRUE, background = "#1565c0", color = "white") %>%
+  column_spec(4, bold = TRUE, color = "#1a6b3c")
+```
+
+---
+
+# Kesimpulan & Rekomendasi
+
+```{r kesimpulan, results='asis'}
+if(nrow(konsumsi_bulan) > 0) {
+  top_stasiun <- tabel_pend$`Nama Stasiun`[1]
+} else {
+  top_stasiun <- "Tidak ada data"
+}
+
+cat(paste0(
+"**Ringkasan Kinerja Bulan ", nama_bulan, " ", tahun_laporan, ":**\n\n",
+"- Total energi tersalurkan mencapai **", format(round(total_kwh), big.mark="."), " kWh** dari **",
+  format(total_sesi, big.mark="."), " sesi** pengisian yang berhasil.\n",
+"- Total pendapatan bulan ini sebesar **Rp ", format(round(total_pendapatan), big.mark="."), "**.\n",
+"- Stasiun dengan pendapatan tertinggi adalah **", top_stasiun, "**.\n",
+"- Rata-rata utilisasi stasiun sebesar **", ifelse(is.na(utilisasi_rata), "N/A", paste0(utilisasi_rata, "%")), "**.\n\n",
+"**Rekomendasi untuk bulan ", bulan_berikutnya, " ", tahun_berikutnya, ":**\n\n",
+"- Prediksi permintaan energi meningkat sekitar **",
+  round((pred_kwh - total_kwh)/total_kwh*100, 1), "%** — pertimbangkan penambahan charger\n",
+"  pada stasiun dengan utilisasi tertinggi.\n",
+"- Lakukan pemeliharaan preventif pada charger sebelum lonjakan permintaan.\n",
+"- Optimalkan tarif dinamis pada jam-jam puncak pengisian.\n"
+))
+```
+
+---
+
+<div class="info-box">
+📌 *Laporan ini dibuat otomatis menggunakan R Markdown. Data bersumber dari sistem internal PT Green Charge Indonesia. Prediksi menggunakan model regresi linear berdasarkan data historis 6 bulan.*
+</div>
